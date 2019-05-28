@@ -1,0 +1,141 @@
+# tiny6410-project
+一、配置交叉编译环境
+	
+	编写envsetup.sh脚本
+	#!/bin/bash
+	export ARCH=arm
+	export CC_PATH=/home/me/work/FriendlyARM/toolschain/4.5.1/bin
+	export CROSS_COMPILE=${CC_PATH}/arm-none-linux-gnueabi-
+	export PATH=${PATH}:${CC_PATH}
+	
+	打开新终端窗口时必须先执行source envsetup.sh，这样就成功配置编译环境
+	
+二、编译u-boot
+	
+	1. 配置u-boot-mini6410
+		
+		make xxxx_config
+	
+		如果不知道板子的具体配置选项，就查看u-boot-mini6410/Makefile
+		 tiny6410 的板子：使用NAND Flash 256 M
+		 
+		 打开u-boot-mini6410/Makefile 与6410 相关的板子信息如下：
+		 smdk6410_config	:	unconfig
+			@$(MKCONFIG) $(@:_config=) arm s3c64xx smdk6410 samsung s3c6410 
+			
+		mini6410_nand_config-ram128 :  unconfig
+			@$(MKCONFIG) mini6410 arm s3c64xx mini6410 samsung s3c6410 NAND ram128
+
+		mini6410_sd_config-ram128 :    unconfig
+			@$(MKCONFIG) mini6410 arm s3c64xx mini6410 samsung s3c6410 SD ram128
+
+		mini6410_nand_config-ram256 :  unconfig
+			@$(MKCONFIG) mini6410 arm s3c64xx mini6410 samsung s3c6410 NAND ram256
+
+		mini6410_sd_config-ram256 :    unconfig
+			@$(MKCONFIG) mini6410 arm s3c64xx mini6410 samsung s3c6410 SD ram256
+			
+		执行 ：
+			make mini6410_nand_config-ram256
+			
+	2. 执行make ，多核CPU可以指定多线程编译+ “-jn”
+	
+三、编译kernel
+	
+	1. 配置kernel【linux-2.6.38】
+	
+		cp config_linux_mini6410 .config
+		
+		备注：
+			友善之臂已经帮我们配置，执行make menuconfig 等配置，生成.config。再将.config 重名config_linux_mini6410【 这一步可以执行 make savedefconfig】，所以我们只要拷贝，就可以了。如果你要配置其他选项还需要执行make menuconfig。
+	
+	2. 执行make ，多核CPU可以指定多线程编译+ “-jn”
+	
+四、编译文件系统
+	
+	1. 配置文件系统【busybox-1.17.2】
+		
+		cp fa.config .config
+		
+	2. 执行make ，多核CPU可以指定多线程编译+ “-jn”
+	
+	3. mkdir rootfs 创建rootfs目录，再该目录下创建以下目录
+		mkdir proc sys dev tmp mnt root home opt var
+	
+	4. 将busybox-1.17.2目录下examples/bootfloppy/etc拷贝到rootfs目录下
+	
+	5. 修改etc/init.d/rcS 文件
+		#! /bin/sh
+		/bin/mount -n -t ramfs ramfs /var
+		/bin/mount -n -t ramfs ramfs /tmp
+		/bin/mount -n -t sysfs none /sys
+		/bin/mount -n -t ramfs none /dev
+		/bin/mkdir /var/tmp
+		/bin/mkdir /var/modules
+		/bin/mkdir /var/run
+		/bin/mkdir /var/log
+		/bin/mkdir -p /dev/pts
+		/bin/mkdir -p /dev/shm
+		/sbin/mdev -s
+		/bin/mount -a
+	
+	6. 修改etc/fstab 文件
+		proc            /proc   	proc    defaults    0   0
+		sysfs           /sys    	sysfs   defaults    0   0
+		none            /dev/pts 	devpts 	defaults    0   0
+		tmpfs           /dev/shm  	tmpfs  	defaults    0   0
+		
+	7.修改etc/inittab 文件
+		::sysinit:/etc/init.d/rcS
+		#::respawn:-/bin/sh
+		#::respawn:-/bin/login
+		console::askfirst:-/bin/sh
+		::ctrlaltdel:/bin/umount -a -r
+		
+	8. 修改etc/profile 文件
+		# /etc/profile: system-wide .profile file for the Bourne shells
+
+		echo
+		echo -n "Processing /etc/profile... "
+		# no-op
+		#echo "Done"
+		echo "Welcome to tiny6410"
+		export HOME=/root
+		export PS1="[root@tiny6410\w]# "
+		echo "enjoy it"
+		echo
+
+	9. /dev目录下创建console字符设备
+		mknod console c 5 1
+		
+		如果不创建这个字符设备，就算系统烧录到板子上，启动会报错“/init 不能打开/r/dev/console: 没有这个文件或者目录”
+		
+	10. 制作文件系统镜像
+		mkyaffs2image-128M rootfs rootfs.img 
+		
+五、烧系统
+	
+	1. 插上SD卡，使用SD-Flasher工具把Superboot 烧写到SD中，把必要的系统文件复制到SD卡的images目录中就可以了。
+	
+		#This line cannot be removed. by FriendlyARM(www.arm9.net)
+
+		LCD-Mode = No
+		LCD-Type = S70
+
+		CheckOneButton=No
+		Action=install
+		OS= Linux
+		USB-Mode=No				//如果使用USB烧录的话，修改成Yes
+
+		VerifyNandWrite=No
+
+		StatusType = Beeper| LED
+
+		#################### Linux #####################
+		Linux-BootLoader = u-boot.bin		//自己编译的u-boot.bin
+		Linux-Kernel = Linux/zImage			//自己编译的zImage
+		Linux-CommandLine = root=/dev/mtdblock2 rootfstype=yaffs2 init=/linuxrc console=ttySAC0,115200
+		Linux-RootFs-InstallImage = Linux/rootfs.img		//自己制作的文件系统镜像
+		#Linux-RootFs-RunImage = Linux/rootfs.ext3
+
+	2. 开关拨到靠近网口铜柱一端，就是从SD卡读取。插上SD卡，接通电源。自动烧写程序。关电源，拔出SD卡，开关拨到网口铜柱另一端，重新上电，系统就正常跑起来了。
